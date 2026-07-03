@@ -267,11 +267,17 @@ function CommentsDialog({ post, open, onOpenChange, currentUser, supabase, onCou
     setLoading(true)
     const { data, error } = await supabase
       .from('comments')
-      .select('id, content, created_at, user_id, profiles(username, full_name, avatar_url)')
+      .select('id, content, created_at, user_id')
       .eq('post_id', post.id)
       .order('created_at', { ascending: true })
-    if (error) toast.error(error.message)
-    else setComments(data || [])
+    if (error) { toast.error(error.message); setLoading(false); return }
+    const userIds = [...new Set((data || []).map(c => c.user_id))]
+    let profilesMap = {}
+    if (userIds.length > 0) {
+      const { data: profs } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', userIds)
+      profs?.forEach(p => { profilesMap[p.id] = p })
+    }
+    setComments((data || []).map(c => ({ ...c, profiles: profilesMap[c.user_id] || null })))
     setLoading(false)
   }, [post, supabase])
 
@@ -284,11 +290,12 @@ function CommentsDialog({ post, open, onOpenChange, currentUser, supabase, onCou
     const { data, error } = await supabase
       .from('comments')
       .insert({ post_id: post.id, user_id: currentUser.id, content: text.trim() })
-      .select('id, content, created_at, user_id, profiles(username, full_name, avatar_url)')
+      .select('id, content, created_at, user_id')
       .single()
     setSending(false)
     if (error) { toast.error(error.message); return }
-    setComments(c => [...c, data])
+    const { data: prof } = await supabase.from('profiles').select('id, username, full_name, avatar_url').eq('id', currentUser.id).maybeSingle()
+    setComments(c => [...c, { ...data, profiles: prof }])
     setText('')
     onCountChange?.(post.id, 1)
   }
@@ -384,10 +391,11 @@ function CreatePostDialog({ open, onOpenChange, supabase, currentUser, onCreated
       }
       const { data, error } = await supabase.from('posts').insert({
         user_id: currentUser.id, title: title.trim() || null, content: content.trim(), category, image_url,
-      }).select('*, profiles(username, full_name, avatar_url)').single()
+      }).select('*').single()
       if (error) throw error
+      const { data: prof } = await supabase.from('profiles').select('id, username, full_name, avatar_url').eq('id', currentUser.id).maybeSingle()
       toast.success('Posted!')
-      onCreated?.({ ...data, likes_count: 0, comments_count: 0, liked_by_me: false })
+      onCreated?.({ ...data, profiles: prof, likes_count: 0, comments_count: 0, liked_by_me: false })
       reset()
       onOpenChange(false)
     } catch (err) {
@@ -692,7 +700,7 @@ function App() {
     const to = from + PAGE_SIZE - 1
     let q = supabase
       .from('posts')
-      .select('*, profiles(username, full_name, avatar_url)')
+      .select('*')
       .order('created_at', { ascending: false })
       .range(from, to)
     if (category !== 'all') q = q.eq('category', category)
@@ -700,17 +708,23 @@ function App() {
     const { data, error } = await q
     if (error) { toast.error(error.message); setPostsLoading(false); return }
 
-    // Fetch counts + liked state
+    // Fetch counts + liked state + profiles
     const ids = (data || []).map(p => p.id)
-    let likeCounts = {}, commentCounts = {}, likedByMe = {}
+    const userIds = [...new Set((data || []).map(p => p.user_id))]
+    let likeCounts = {}, commentCounts = {}, likedByMe = {}, profilesMap = {}
     if (ids.length > 0) {
-      const { data: likes } = await supabase.from('likes').select('post_id, user_id').in('post_id', ids)
-      const { data: comments } = await supabase.from('comments').select('post_id').in('post_id', ids)
-      likes?.forEach(l => { likeCounts[l.post_id] = (likeCounts[l.post_id] || 0) + 1; if (user && l.user_id === user.id) likedByMe[l.post_id] = true })
-      comments?.forEach(c => { commentCounts[c.post_id] = (commentCounts[c.post_id] || 0) + 1 })
+      const [likesRes, commentsRes, profilesRes] = await Promise.all([
+        supabase.from('likes').select('post_id, user_id').in('post_id', ids),
+        supabase.from('comments').select('post_id').in('post_id', ids),
+        supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', userIds),
+      ])
+      likesRes.data?.forEach(l => { likeCounts[l.post_id] = (likeCounts[l.post_id] || 0) + 1; if (user && l.user_id === user.id) likedByMe[l.post_id] = true })
+      commentsRes.data?.forEach(c => { commentCounts[c.post_id] = (commentCounts[c.post_id] || 0) + 1 })
+      profilesRes.data?.forEach(p => { profilesMap[p.id] = p })
     }
     const enriched = (data || []).map(p => ({
       ...p,
+      profiles: profilesMap[p.user_id] || null,
       likes_count: likeCounts[p.id] || 0,
       comments_count: commentCounts[p.id] || 0,
       liked_by_me: !!likedByMe[p.id],
