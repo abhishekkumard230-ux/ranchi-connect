@@ -15,10 +15,12 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from 'sonner'
 import { useTheme } from 'next-themes'
+import UserProfileView from '@/components/ranchi/user-profile-view'
+import NotificationsSheet from '@/components/ranchi/notifications-sheet'
 import {
   Search, Plus, Heart, MessageCircle, Image as ImageIcon, LogOut, User, Shield,
   Moon, Sun, Newspaper, Calendar, HelpCircle, ShoppingBag, Briefcase, Sparkles, Home,
-  Loader2, Trash2, Flag, X, MapPin, Send
+  Loader2, Trash2, Flag, X, MapPin, Send, Bell
 } from 'lucide-react'
 
 const CATEGORIES = [
@@ -187,7 +189,7 @@ function AuthView({ supabase }) {
 }
 
 // ---------------- POST CARD ----------------
-function PostCard({ post, currentUser, supabase, onDelete, onOpenComments }) {
+function PostCard({ post, currentUser, supabase, onDelete, onOpenComments, onOpenProfile }) {
   const [likeCount, setLikeCount] = useState(post.likes_count || 0)
   const [liked, setLiked] = useState(post.liked_by_me || false)
   const [likeBusy, setLikeBusy] = useState(false)
@@ -241,16 +243,20 @@ function PostCard({ post, currentUser, supabase, onDelete, onOpenComments }) {
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
-            <Avatar className="h-10 w-10 border-2 border-background shadow">
-              <AvatarImage src={author.avatar_url} />
-              <AvatarFallback className="bg-gradient-to-br from-orange-500 to-emerald-500 text-white text-sm font-semibold">
-                {(author.full_name || author.username || 'U').charAt(0).toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
+            <button onClick={() => onOpenProfile?.(post.user_id)} className="shrink-0">
+              <Avatar className="h-10 w-10 border-2 border-background shadow hover:ring-2 hover:ring-orange-400 transition">
+                <AvatarImage src={author.avatar_url} />
+                <AvatarFallback className="bg-gradient-to-br from-orange-500 to-emerald-500 text-white text-sm font-semibold">
+                  {(author.full_name || author.username || 'U').charAt(0).toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+            </button>
             <div>
-              <div className="font-semibold text-sm leading-tight">{author.full_name || author.username || 'Anonymous'}</div>
+              <button onClick={() => onOpenProfile?.(post.user_id)} className="font-semibold text-sm leading-tight hover:underline text-left block">
+                {author.full_name || author.username || 'Anonymous'}
+              </button>
               <div className="text-xs text-muted-foreground flex items-center gap-2">
-                <span>@{author.username || 'user'}</span>
+                <button onClick={() => onOpenProfile?.(post.user_id)} className="hover:underline">@{author.username || 'user'}</button>
                 <span>·</span>
                 <span>{timeAgo(post.created_at)}</span>
               </div>
@@ -715,6 +721,52 @@ function App() {
   const [adminOpen, setAdminOpen] = useState(false)
   const [commentsPost, setCommentsPost] = useState(null)
 
+  // User profile viewing
+  const [viewProfileId, setViewProfileId] = useState(null)
+
+  // Notifications
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
+
+  // Realtime notifications
+  useEffect(() => {
+    if (!user) return
+    // Initial unread count
+    const loadUnread = async () => {
+      const { count } = await supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('read', false)
+      setUnreadCount(count || 0)
+    }
+    loadUnread()
+
+    const channel = supabase
+      .channel(`notif-${user.id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` }, (payload) => {
+        setUnreadCount(c => c + 1)
+        toast.info('You have a new notification', { duration: 2500 })
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` }, () => {
+        loadUnread()
+      })
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [user, supabase])
+
+  // Open post from notification: scroll to it & open comments if comment specified
+  const openPostFromNotif = async (postId, commentId) => {
+    const existing = posts.find(p => p.id === postId)
+    if (existing) {
+      setCommentsPost(commentId ? existing : existing)
+    } else {
+      // fetch and open in comments dialog
+      const { data } = await supabase.from('posts').select('*').eq('id', postId).maybeSingle()
+      if (data) {
+        const { data: prof } = await supabase.from('profiles').select('id, username, full_name, avatar_url').eq('id', data.user_id).maybeSingle()
+        setCommentsPost({ ...data, profiles: prof })
+      }
+    }
+  }
+
   // Auth listener
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
@@ -830,6 +882,14 @@ function App() {
           <Button variant="ghost" size="icon" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
             {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
+          <Button variant="ghost" size="icon" onClick={() => setNotifOpen(true)} className="relative">
+            <Bell className="h-4 w-4" />
+            {unreadCount > 0 && (
+              <span className="absolute top-0.5 right-0.5 h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Avatar className="h-9 w-9 cursor-pointer border-2 border-background shadow">
@@ -845,6 +905,7 @@ function App() {
                 <div className="text-xs text-muted-foreground">@{profile?.username || 'user'}</div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setViewProfileId(user.id)}><User className="h-4 w-4 mr-2" />View My Profile</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setProfileOpen(true)}><User className="h-4 w-4 mr-2" />Edit Profile</DropdownMenuItem>
               {isAdmin && <DropdownMenuItem onClick={() => setAdminOpen(true)}><Shield className="h-4 w-4 mr-2" />Admin Dashboard</DropdownMenuItem>}
               <DropdownMenuSeparator />
@@ -875,6 +936,7 @@ function App() {
             <PostCard key={p.id} post={p} currentUser={user} supabase={supabase}
               onDelete={(id) => setPosts(ps => ps.filter(x => x.id !== id))}
               onOpenComments={setCommentsPost}
+              onOpenProfile={setViewProfileId}
             />
           ))}
           {postsLoading && (
@@ -910,6 +972,22 @@ function App() {
         currentUser={user}
         supabase={supabase}
         onCountChange={(id, delta) => setPosts(ps => ps.map(p => p.id === id ? { ...p, comments_count: (p.comments_count || 0) + delta } : p))}
+      />
+      <UserProfileView
+        userId={viewProfileId}
+        open={!!viewProfileId}
+        onOpenChange={(v) => !v && setViewProfileId(null)}
+        supabase={supabase}
+        currentUser={user}
+        onOpenProfile={setViewProfileId}
+      />
+      <NotificationsSheet
+        open={notifOpen}
+        onOpenChange={setNotifOpen}
+        supabase={supabase}
+        currentUser={user}
+        onOpenPost={openPostFromNotif}
+        onOpenProfile={setViewProfileId}
       />
     </div>
   )
