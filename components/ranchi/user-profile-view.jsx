@@ -8,7 +8,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Card, CardContent } from '@/components/ui/card'
 import { toast } from 'sonner'
-import { MapPin, Calendar, Heart, MessageCircle, UserPlus, UserCheck, Loader2, ArrowLeft, X } from 'lucide-react'
+import { MapPin, Calendar, Heart, MessageCircle, UserPlus, UserCheck, Loader2, ArrowLeft, X, MessageSquare } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 
 function timeAgo(date) {
   const s = Math.floor((new Date() - new Date(date)) / 1000)
@@ -20,6 +21,7 @@ function timeAgo(date) {
 }
 
 export default function UserProfileView({ userId, open, onOpenChange, supabase, currentUser, onOpenProfile }) {
+  const router = useRouter()
   const [profile, setProfile] = useState(null)
   const [posts, setPosts] = useState([])
   const [stats, setStats] = useState({ posts: 0, followers: 0, following: 0, likes: 0 })
@@ -81,6 +83,32 @@ export default function UserProfileView({ userId, open, onOpenChange, supabase, 
     finally { setFollowBusy(false) }
   }
 
+  const startMessage = async () => {
+    if (!currentUser) return toast.error('Sign in to message')
+    try {
+      // Check for existing 1:1 conversation
+      const { data: myParts } = await supabase.from('conversation_participants').select('conversation_id').eq('user_id', currentUser.id)
+      const myConvIds = (myParts || []).map(p => p.conversation_id)
+      if (myConvIds.length > 0) {
+        const { data: overlap } = await supabase.from('conversation_participants').select('conversation_id').eq('user_id', userId).in('conversation_id', myConvIds)
+        if (overlap && overlap.length > 0) {
+          onOpenChange(false)
+          router.push(`/messages?c=${overlap[0].conversation_id}`)
+          return
+        }
+      }
+      const { data: conv, error } = await supabase.from('conversations').insert({}).select().single()
+      if (error) throw error
+      const { error: pe } = await supabase.from('conversation_participants').insert([
+        { conversation_id: conv.id, user_id: currentUser.id },
+        { conversation_id: conv.id, user_id: userId },
+      ])
+      if (pe) throw pe
+      onOpenChange(false)
+      router.push(`/messages?c=${conv.id}`)
+    } catch (e) { toast.error(e.message) }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] p-0 overflow-hidden flex flex-col">
@@ -120,10 +148,15 @@ export default function UserProfileView({ userId, open, onOpenChange, supabase, 
               )}
             </div>
             {!isOwn && currentUser && (
-              <Button onClick={toggleFollow} disabled={followBusy} variant={isFollowing ? 'outline' : 'default'}
-                className={isFollowing ? '' : 'bg-gradient-to-r from-orange-500 to-emerald-500 text-white'}>
-                {followBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : isFollowing ? <><UserCheck className="h-4 w-4 mr-1.5" />Following</> : <><UserPlus className="h-4 w-4 mr-1.5" />Follow</>}
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={startMessage} variant="outline" size="sm">
+                  <MessageSquare className="h-4 w-4 mr-1.5" />Message
+                </Button>
+                <Button onClick={toggleFollow} disabled={followBusy} variant={isFollowing ? 'outline' : 'default'}
+                  className={isFollowing ? '' : 'bg-gradient-to-r from-orange-500 to-emerald-500 text-white'}>
+                  {followBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : isFollowing ? <><UserCheck className="h-4 w-4 mr-1.5" />Following</> : <><UserPlus className="h-4 w-4 mr-1.5" />Follow</>}
+                </Button>
+              </div>
             )}
           </div>
 
