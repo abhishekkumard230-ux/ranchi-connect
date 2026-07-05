@@ -86,26 +86,10 @@ export default function UserProfileView({ userId, open, onOpenChange, supabase, 
   const startMessage = async () => {
     if (!currentUser) return toast.error('Sign in to message')
     try {
-      // Check for existing 1:1 conversation
-      const { data: myParts } = await supabase.from('conversation_participants').select('conversation_id').eq('user_id', currentUser.id)
-      const myConvIds = (myParts || []).map(p => p.conversation_id)
-      if (myConvIds.length > 0) {
-        const { data: overlap } = await supabase.from('conversation_participants').select('conversation_id').eq('user_id', userId).in('conversation_id', myConvIds)
-        if (overlap && overlap.length > 0) {
-          onOpenChange(false)
-          router.push(`/messages?c=${overlap[0].conversation_id}`)
-          return
-        }
-      }
-      const { data: conv, error } = await supabase.from('conversations').insert({}).select().single()
+      const { data: convId, error } = await supabase.rpc('create_direct_conversation', { other_user_id: userId })
       if (error) throw error
-      const { error: pe } = await supabase.from('conversation_participants').insert([
-        { conversation_id: conv.id, user_id: currentUser.id },
-        { conversation_id: conv.id, user_id: userId },
-      ])
-      if (pe) throw pe
       onOpenChange(false)
-      router.push(`/messages?c=${conv.id}`)
+      router.push(`/messages?c=${convId}`)
     } catch (e) { toast.error(e.message) }
   }
 

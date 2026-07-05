@@ -458,24 +458,9 @@ function NewConversationDialog({ supabase, user, onClose, onCreated }) {
   const start = async (otherId) => {
     setBusy(true)
     try {
-      // Check for existing 1:1 conversation
-      const { data: myParts } = await supabase.from('conversation_participants').select('conversation_id').eq('user_id', user.id)
-      const myConvIds = (myParts || []).map(p => p.conversation_id)
-      if (myConvIds.length > 0) {
-        const { data: overlap } = await supabase.from('conversation_participants').select('conversation_id').eq('user_id', otherId).in('conversation_id', myConvIds)
-        if (overlap && overlap.length > 0) {
-          onCreated(overlap[0].conversation_id)
-          return
-        }
-      }
-      // Create new conversation
-      const { data: conv, error } = await supabase.from('conversations').insert({}).select().single()
+      const { data: convId, error } = await supabase.rpc('create_direct_conversation', { other_user_id: otherId })
       if (error) throw error
-      await supabase.from('conversation_participants').insert([
-        { conversation_id: conv.id, user_id: user.id },
-        { conversation_id: conv.id, user_id: otherId },
-      ])
-      onCreated(conv.id)
+      onCreated(convId)
     } catch (e) {
       toast.error(e.message)
     } finally {
