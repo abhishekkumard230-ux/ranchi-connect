@@ -31,7 +31,7 @@ export default function ThreadedComments({ postId, currentUser, supabase, onOpen
     // Fetch all comments for this post
     const { data: allComments, error } = await supabase
       .from('comments')
-      .select('id, content, created_at, user_id, parent_id')
+      .select('id, content, created_at, updated_at, user_id, parent_id')
       .eq('post_id', postId)
       .order('created_at', { ascending: true })
     if (error) { toast.error(error.message); setLoading(false); return }
@@ -74,6 +74,9 @@ export default function ThreadedComments({ postId, currentUser, supabase, onOpen
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'comments', filter: `post_id=eq.${postId}` }, (payload) => {
         setComments(cs => cs.filter(c => c.id !== payload.old.id))
       })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'comments', filter: `post_id=eq.${postId}` }, (payload) => {
+        setComments(cs => cs.map(c => c.id === payload.new.id ? { ...c, content: payload.new.content, updated_at: payload.new.updated_at } : c))
+      })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
     // eslint-disable-next-line
@@ -108,6 +111,14 @@ export default function ThreadedComments({ postId, currentUser, supabase, onOpen
     const { error } = await supabase.from('comments').delete().eq('id', id)
     if (error) { toast.error(error.message); return }
     setComments(cs => cs.filter(c => c.id !== id))
+  }
+
+  const editComment = async (id, newContent) => {
+    if (!newContent.trim()) return false
+    const { error } = await supabase.from('comments').update({ content: newContent.trim() }).eq('id', id)
+    if (error) { toast.error(error.message); return false }
+    setComments(cs => cs.map(c => c.id === id ? { ...c, content: newContent.trim() } : c))
+    return true
   }
 
   const toggleLikeComment = async (commentId) => {
@@ -179,6 +190,7 @@ export default function ThreadedComments({ postId, currentUser, supabase, onOpen
             currentUser={currentUser}
             onReply={submit}
             onDelete={deleteComment}
+            onEdit={editComment}
             onLike={toggleLikeComment}
             onOpenProfile={onOpenProfile}
           />
@@ -188,20 +200,30 @@ export default function ThreadedComments({ postId, currentUser, supabase, onOpen
   )
 }
 
-function CommentNode({ node, depth, profiles, likeCounts, likedByMe, currentUser, onReply, onDelete, onLike, onOpenProfile }) {
+// Count all descendants for reply count display
+function countDescendants(node) {
+  let count = node.children.length
+  node.children.forEach(c => { count += countDescendants(c) })
+  return count
+}
+
+function CommentNode({ node, depth, profiles, likeCounts, likedByMe, currentUser, onReply, onDelete, onEdit, onLike, onOpenProfile }) {
   const [showReply, setShowReply] = useState(false)
   const [replyText, setReplyText] = useState('')
   const [sending, setSending] = useState(false)
   const [collapsed, setCollapsed] = useState(depth >= 3 && node.children.length > 3)
+  const [editing, setEditing] = useState(false)
+  const [editText, setEditText] = useState(node.content)
+  const [savingEdit, setSavingEdit] = useState(false)
   const author = profiles[node.user_id]
   const isOwn = currentUser?.id === node.user_id
   const isDeepest = depth >= MAX_NESTING - 1
+  const totalReplies = countDescendants(node)
 
   const handleReply = async (e) => {
     e.preventDefault()
     if (!replyText.trim()) return
     setSending(true)
-    // if we're at max depth, keep same parent instead of nesting further
     const parentId = isDeepest ? node.parent_id || node.id : node.id
     const ok = await onReply(replyText, parentId)
     setSending(false)
@@ -209,6 +231,14 @@ function CommentNode({ node, depth, profiles, likeCounts, likedByMe, currentUser
       setReplyText('')
       setShowReply(false)
     }
+  }
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault()
+    setSavingEdit(true)
+    const ok = await onEdit(node.id, editText)
+    setSavingEdit(false)
+    if (ok) setEditing(false)
   }
 
   return (
@@ -227,7 +257,19 @@ function CommentNode({ node, depth, profiles, likeCounts, likedByMe, currentUser
             <button onClick={() => onOpenProfile?.(node.user_id)} className="text-xs font-semibold hover:underline">
               {author?.full_name || author?.username || 'User'}
             </button>
-            <div className="text-sm whitespace-pre-wrap break-words">{renderContent(node.content, onOpenProfile)}</div>
+            {editing ? (
+              <form onSubmit={handleSaveEdit} className="mt-1 space-y-2">
+                <Input autoFocus value={editText} onChange={e => setEditText(e.target.value)} className="text-sm h-8" />
+                <div className="flex gap-2">
+                  <Button type="submit" size="sm" disabled={savingEdit || !editText.trim()} className="h-7 text-xs">
+                    {savingEdit ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Save'}
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => { setEditing(false); setEditText(node.content) }} className="h-7 text-xs">Cancel</Button>
+                </div>
+              </form>
+            ) : (
+              <div className="text-sm whitespace-pre-wrap break-words">{renderContent(node.content, onOpenProfile)}{node.updated_at && <span className="text-[10px] text-muted-foreground italic ml-1">(edited)</span>}</div>
+            )}
           </div>
           <div className="flex items-center gap-3 mt-1 px-2 text-[11px] text-muted-foreground">
             <span>{timeAgo(node.created_at)}</span>
@@ -238,8 +280,14 @@ function CommentNode({ node, depth, profiles, likeCounts, likedByMe, currentUser
             {currentUser && (
               <button onClick={() => setShowReply(v => !v)} className="hover:text-foreground transition font-medium">Reply</button>
             )}
-            {isOwn && (
-              <button onClick={() => onDelete(node.id)} className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition"><Trash2 className="h-3 w-3" /></button>
+            {totalReplies > 0 && (
+              <span className="text-orange-600 font-medium">{totalReplies} {totalReplies === 1 ? 'reply' : 'replies'}</span>
+            )}
+            {isOwn && !editing && (
+              <>
+                <button onClick={() => setEditing(true)} className="opacity-0 group-hover:opacity-100 hover:text-foreground transition font-medium">Edit</button>
+                <button onClick={() => onDelete(node.id)} className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition"><Trash2 className="h-3 w-3" /></button>
+              </>
             )}
           </div>
 
@@ -276,6 +324,7 @@ function CommentNode({ node, depth, profiles, likeCounts, likedByMe, currentUser
                       currentUser={currentUser}
                       onReply={onReply}
                       onDelete={onDelete}
+                      onEdit={onEdit}
                       onLike={onLike}
                       onOpenProfile={onOpenProfile}
                     />

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -778,7 +778,13 @@ function App() {
       comments_count: commentCounts[p.id] || 0,
       liked_by_me: !!likedByMe[p.id],
     }))
-    setPosts(prev => reset ? enriched : [...prev, ...enriched])
+    // Dedupe by id (prevents duplicates from realtime + pagination overlap)
+    setPosts(prev => {
+      if (reset) return enriched
+      const existing = new Set(prev.map(p => p.id))
+      const newOnes = enriched.filter(p => !existing.has(p.id))
+      return [...prev, ...newOnes]
+    })
     setHasMore((data || []).length === PAGE_SIZE)
     setPostsLoading(false)
   }, [supabase, category, search, page, user])
@@ -792,10 +798,62 @@ function App() {
     // eslint-disable-next-line
   }, [category, search, user])
 
-  const loadMore = () => {
-    setPage(p => p + 1)
-  }
   useEffect(() => { if (page > 0) loadPosts(false) /* eslint-disable-next-line */ }, [page])
+
+  // Infinite scroll: IntersectionObserver on sentinel
+  const sentinelRef = useRef(null)
+  useEffect(() => {
+    if (!sentinelRef.current) return
+    const el = sentinelRef.current
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !postsLoading && hasMore) {
+          setPage(p => p + 1)
+        }
+      },
+      { rootMargin: '400px' } // load 400px before reaching bottom
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [postsLoading, hasMore])
+
+  // Pull-to-refresh on mobile (simple touch handler)
+  const [refreshing, setRefreshing] = useState(false)
+  const pullStartY = useRef(0)
+  const pullDelta = useRef(0)
+
+  useEffect(() => {
+    const onTouchStart = (e) => {
+      if (window.scrollY === 0) pullStartY.current = e.touches[0].clientY
+    }
+    const onTouchMove = (e) => {
+      if (window.scrollY === 0 && pullStartY.current > 0) {
+        pullDelta.current = e.touches[0].clientY - pullStartY.current
+      }
+    }
+    const onTouchEnd = async () => {
+      if (pullDelta.current > 80 && !refreshing) {
+        setRefreshing(true)
+        setPage(0)
+        setPosts([])
+        setHasMore(true)
+        await loadPosts(true)
+        setRefreshing(false)
+        toast.success('Feed refreshed')
+      }
+      pullStartY.current = 0
+      pullDelta.current = 0
+    }
+    document.addEventListener('touchstart', onTouchStart, { passive: true })
+    document.addEventListener('touchmove', onTouchMove, { passive: true })
+    document.addEventListener('touchend', onTouchEnd)
+    return () => {
+      document.removeEventListener('touchstart', onTouchStart)
+      document.removeEventListener('touchmove', onTouchMove)
+      document.removeEventListener('touchend', onTouchEnd)
+    }
+    // eslint-disable-next-line
+  }, [refreshing])
 
   const signOut = async () => {
     await supabase.auth.signOut()
@@ -906,6 +964,7 @@ function App() {
             <>
               <Skeleton className="h-48 w-full" />
               <Skeleton className="h-48 w-full" />
+              <Skeleton className="h-48 w-full" />
             </>
           )}
           {!postsLoading && posts.length === 0 && (
@@ -915,9 +974,22 @@ function App() {
               <Button onClick={() => setCreateOpen(true)} className="mt-4 bg-gradient-to-r from-orange-500 to-emerald-500 text-white"><Plus className="h-4 w-4 mr-1.5" />Create Post</Button>
             </div>
           )}
-          {!postsLoading && hasMore && posts.length > 0 && (
-            <div className="text-center pt-4">
-              <Button variant="outline" onClick={loadMore}>Load more</Button>
+          {/* Infinite scroll sentinel */}
+          {hasMore && posts.length > 0 && (
+            <div ref={sentinelRef} className="py-6 flex justify-center">
+              {postsLoading ? (
+                <Loader2 className="h-6 w-6 animate-spin text-orange-500" />
+              ) : (
+                <span className="text-xs text-muted-foreground">Loading more posts…</span>
+              )}
+            </div>
+          )}
+          {!hasMore && posts.length > 0 && (
+            <div className="text-center py-8">
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-muted text-xs text-muted-foreground">
+                <MapPin className="h-3 w-3" />
+                You&apos;re all caught up! End of feed.
+              </div>
             </div>
           )}
         </div>
