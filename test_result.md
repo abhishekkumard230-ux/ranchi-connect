@@ -101,3 +101,120 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: "Build Ranchi Connect - community platform for Ranchi with auth (Google + Email), posts (text/image), likes, comments, categories, search, profile pages with follow, real-time notifications system, admin dashboard, dark mode, mobile-first."
+
+frontend:
+  - task: "Auth (Email + Google OAuth)"
+    implemented: true
+    working: "NA"
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Email signup with verification + Google OAuth via Supabase. Google configured in dashboard. Callback route at /auth/callback."
+
+  - task: "Feed with categories, search, pagination"
+    implemented: true
+    working: "NA"
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Feed loads posts via Supabase client with RLS. Supports 7 categories + full-text search on title/content + Load more pagination."
+
+  - task: "Create post (text + image via Supabase Storage)"
+    implemented: true
+    working: "NA"
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+
+  - task: "Like, comment, delete, report"
+    implemented: true
+    working: "NA"
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+
+  - task: "User Profile View with follow"
+    implemented: true
+    working: "NA"
+    file: "components/ranchi/user-profile-view.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Click username/avatar in feed opens profile dialog with cover, avatar, bio, join date, follower/following/posts/likes counts, follow/unfollow button, and user's posts."
+
+  - task: "Real-time Notifications system"
+    implemented: true
+    working: "NA"
+    file: "components/ranchi/notifications-sheet.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Bell icon in header with red unread badge. Sheet has All/Unread/Settings tabs. Realtime via supabase.channel postgres_changes on notifications table. Trigger-generated notifications for likes/comments/replies/follows/mentions. Settings toggles respected by triggers."
+
+  - task: "Admin dashboard"
+    implemented: true
+    working: "NA"
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+
+  - task: "Dark mode + responsive UI + SEO metadata"
+    implemented: true
+    working: "NA"
+    file: "app/layout.js, app/page.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+
+backend:
+  - task: "Supabase database schema (v1 + v2)"
+    implemented: true
+    working: true
+    file: "supabase_schema.sql, supabase_schema_v2.sql"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "user"
+        -comment: "User confirmed both SQL scripts executed successfully in Supabase. Tables profiles, posts, comments, likes, reports, follows, notifications, notification_settings all created with RLS + triggers."
+
+metadata:
+  created_by: "main_agent"
+  version: "2.0"
+  test_sequence: 0
+  run_ui: true
+
+test_plan:
+  current_focus:
+    - "User Profile View with follow"
+    - "Real-time Notifications system"
+    - "Like, comment, delete, report"
+    - "Create post (text + image via Supabase Storage)"
+    - "Feed with categories, search, pagination"
+  stuck_tasks: []
+  test_all: true
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -message: "E2E test complete. Verified via Playwright + direct DB queries with service role key: (1) Follow system works - follows row created, notification generated. (2) All 4 notification types (like, comment, follow, mention) fire from Postgres triggers, appear in real-time in the bell sheet, and are displayed with correct icons + actor avatars. (3) Mark all read clears badge. (4) Settings tab shows 6 toggles that persist. (5) User profile view opens with full data (cover, avatar, bio, join date, follower/following counts, Ranchi location, posts list). Test accounts created via admin API: alice.test@ranchiconnect.dev / bob.test@ranchiconnect.dev / Password123!"
