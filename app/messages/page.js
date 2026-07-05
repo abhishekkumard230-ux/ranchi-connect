@@ -44,15 +44,28 @@ export default function MessagesPage() {
 
   // Auth
   useEffect(() => {
-    supabase.auth.getUser().then(async ({ data }) => {
-      const u = data.user || null
-      setUser(u)
-      if (u) {
-        const { data: p } = await supabase.from('profiles').select('*').eq('id', u.id).maybeSingle()
-        setProfile(p)
+    let mounted = true
+    const timeout = setTimeout(() => { if (mounted) setAuthLoading(false) }, 6000)
+    ;(async () => {
+      try {
+        const { data } = await supabase.auth.getUser()
+        if (!mounted) return
+        const u = data?.user || null
+        setUser(u)
+        if (u) {
+          try {
+            const { data: p } = await supabase.from('profiles').select('*').eq('id', u.id).maybeSingle()
+            if (mounted) setProfile(p)
+          } catch (e) { console.error('[messages] profile load:', e?.message) }
+        }
+      } catch (e) {
+        console.error('[messages] auth error:', e?.message)
+      } finally {
+        if (mounted) setAuthLoading(false)
+        clearTimeout(timeout)
       }
-      setAuthLoading(false)
-    })
+    })()
+    return () => { mounted = false; clearTimeout(timeout) }
   }, [supabase])
 
   const loadConversations = useCallback(async () => {

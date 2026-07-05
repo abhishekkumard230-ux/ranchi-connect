@@ -722,19 +722,45 @@ function App() {
 
   // Auth listener
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      const u = data.session?.user || null
-      setUser(u)
-      if (u) await loadProfile(u.id)
-      setAuthLoading(false)
-    })
+    let mounted = true
+    // Safety timeout: never leave the app hanging on a spinner
+    const timeoutId = setTimeout(() => {
+      if (mounted) setAuthLoading(false)
+    }, 6000)
+
+    ;(async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession()
+        if (!mounted) return
+        if (error) console.error('[auth] getSession error:', error.message)
+        const u = data?.session?.user || null
+        setUser(u)
+        if (u) {
+          try { await loadProfile(u.id) } catch (e) { console.error('[auth] loadProfile error:', e?.message) }
+        }
+      } catch (e) {
+        console.error('[auth] session check failed:', e?.message)
+      } finally {
+        if (mounted) setAuthLoading(false)
+        clearTimeout(timeoutId)
+      }
+    })()
+
     const { data: sub } = supabase.auth.onAuthStateChange(async (_e, session) => {
       const u = session?.user || null
       setUser(u)
-      if (u) await loadProfile(u.id)
-      else setProfile(null)
+      if (u) {
+        try { await loadProfile(u.id) } catch (e) { console.error('[auth] loadProfile onchange:', e?.message) }
+      } else {
+        setProfile(null)
+      }
     })
-    return () => sub.subscription.unsubscribe()
+
+    return () => {
+      mounted = false
+      clearTimeout(timeoutId)
+      sub?.subscription?.unsubscribe?.()
+    }
     // eslint-disable-next-line
   }, [])
 
@@ -863,7 +889,35 @@ function App() {
   const isAdmin = profile?.role === 'admin' || profile?.role === 'moderator'
 
   if (authLoading) {
-    return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-orange-500" /></div>
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-orange-500 mx-auto mb-3" />
+          <p className="text-sm text-muted-foreground">Loading Ranchi Connect…</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Config error surface (env vars missing)
+  if (typeof window !== 'undefined' && window.__RANCHI_CONFIG_ERROR__) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="max-w-md text-center">
+          <div className="inline-flex items-center justify-center h-14 w-14 rounded-2xl bg-red-500/10 text-red-500 mb-4">
+            <MapPin className="h-7 w-7" />
+          </div>
+          <h1 className="text-xl font-bold mb-2">Configuration error</h1>
+          <p className="text-sm text-muted-foreground mb-4">
+            Supabase environment variables are missing on this deployment. Please set
+            <code className="mx-1 px-1 rounded bg-muted">NEXT_PUBLIC_SUPABASE_URL</code>
+            and
+            <code className="mx-1 px-1 rounded bg-muted">NEXT_PUBLIC_SUPABASE_ANON_KEY</code>
+            in your Vercel project settings and redeploy.
+          </p>
+        </div>
+      </div>
+    )
   }
 
   if (!user) return <AuthView supabase={supabase} />
