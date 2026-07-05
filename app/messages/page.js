@@ -238,6 +238,8 @@ function ChatPane({ supabase, user, conversation, others, onBack, onMessagesRead
   const [showEmoji, setShowEmoji] = useState(false)
   const [otherTyping, setOtherTyping] = useState(false)
   const scrollRef = useRef(null)
+  const channelRef = useRef(null)
+  const typingTimeoutRef = useRef(null)
   const other = others[0] || {}
 
   const load = useCallback(async () => {
@@ -265,27 +267,32 @@ function ChatPane({ supabase, user, conversation, others, onBack, onMessagesRead
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversation.id}` }, async (payload) => {
         setMessages(ms => ms.some(m => m.id === payload.new.id) ? ms : [...ms, payload.new])
         if (payload.new.sender_id !== user.id) {
-          // Mark read
           await supabase.from('conversation_participants').update({ last_read_at: new Date().toISOString() }).eq('conversation_id', conversation.id).eq('user_id', user.id)
         }
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversation.id}` }, (payload) => {
         setMessages(ms => ms.filter(m => m.id !== payload.old.id))
       })
-      // Typing indicator via broadcast
       .on('broadcast', { event: 'typing' }, (msg) => {
         if (msg.payload.user_id !== user.id) {
           setOtherTyping(true)
-          clearTimeout(window.__typingTO)
-          window.__typingTO = setTimeout(() => setOtherTyping(false), 2500)
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+          typingTimeoutRef.current = setTimeout(() => setOtherTyping(false), 2500)
         }
       })
       .subscribe()
-    return () => { supabase.removeChannel(ch) }
+    channelRef.current = ch
+    return () => {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+      supabase.removeChannel(ch)
+      channelRef.current = null
+    }
   }, [conversation.id, supabase, user.id])
 
   const broadcastTyping = () => {
-    supabase.channel(`conv-${conversation.id}`).send({ type: 'broadcast', event: 'typing', payload: { user_id: user.id } })
+    if (channelRef.current) {
+      channelRef.current.send({ type: 'broadcast', event: 'typing', payload: { user_id: user.id } })
+    }
   }
 
   const handleFileSelect = (e) => {
