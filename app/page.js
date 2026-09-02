@@ -916,48 +916,62 @@ function App() {
 
   const loadPosts = useCallback(async (reset = false) => {
     setPostsLoading(true)
-    const from = reset ? 0 : page * PAGE_SIZE
-    const to = from + PAGE_SIZE - 1
-    let q = supabase
-      .from('posts')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .range(from, to)
-    if (category !== 'all') q = q.eq('category', category)
-    if (search.trim()) q = q.or(`title.ilike.%${search}%,content.ilike.%${search}%`)
-    const { data, error } = await q
-    if (error) { toast.error(error.message); setPostsLoading(false); return }
+    // Safety: never leave the feed hanging on skeletons no matter what
+    const failsafe = setTimeout(() => setPostsLoading(false), 8000)
+    try {
+      const from = reset ? 0 : page * PAGE_SIZE
+      const to = from + PAGE_SIZE - 1
+      let q = supabase
+        .from('posts')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, to)
+      if (category !== 'all') q = q.eq('category', category)
+      if (search.trim()) q = q.or(`title.ilike.%${search}%,content.ilike.%${search}%`)
+      const { data, error } = await q
+      if (error) { toast.error(error.message); return }
 
-    // Fetch counts + liked state + profiles
-    const ids = (data || []).map(p => p.id)
-    const userIds = [...new Set((data || []).map(p => p.user_id))]
-    let likeCounts = {}, commentCounts = {}, likedByMe = {}, profilesMap = {}
-    if (ids.length > 0) {
-      const [likesRes, commentsRes, profilesRes] = await Promise.all([
-        supabase.from('likes').select('post_id, user_id').in('post_id', ids),
-        supabase.from('comments').select('post_id').in('post_id', ids),
-        supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', userIds),
-      ])
-      likesRes.data?.forEach(l => { likeCounts[l.post_id] = (likeCounts[l.post_id] || 0) + 1; if (user && l.user_id === user.id) likedByMe[l.post_id] = true })
-      commentsRes.data?.forEach(c => { commentCounts[c.post_id] = (commentCounts[c.post_id] || 0) + 1 })
-      profilesRes.data?.forEach(p => { profilesMap[p.id] = p })
+      // Fetch counts + liked state + profiles
+      const ids = (data || []).map(p => p.id)
+      const userIds = [...new Set((data || []).map(p => p.user_id))]
+      let likeCounts = {}, commentCounts = {}, likedByMe = {}, profilesMap = {}
+      if (ids.length > 0) {
+        try {
+          const [likesRes, commentsRes, profilesRes] = await Promise.all([
+            supabase.from('likes').select('post_id, user_id').in('post_id', ids),
+            supabase.from('comments').select('post_id').in('post_id', ids),
+            supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', userIds),
+          ])
+          likesRes.data?.forEach(l => { likeCounts[l.post_id] = (likeCounts[l.post_id] || 0) + 1; if (user && l.user_id === user.id) likedByMe[l.post_id] = true })
+          commentsRes.data?.forEach(c => { commentCounts[c.post_id] = (commentCounts[c.post_id] || 0) + 1 })
+          profilesRes.data?.forEach(p => { profilesMap[p.id] = p })
+        } catch (subErr) {
+          // If enrichment fails, still show the raw posts
+          console.error('[feed] enrichment error:', subErr?.message)
+        }
+      }
+      const enriched = (data || []).map(p => ({
+        ...p,
+        profiles: profilesMap[p.user_id] || null,
+        likes_count: likeCounts[p.id] || 0,
+        comments_count: commentCounts[p.id] || 0,
+        liked_by_me: !!likedByMe[p.id],
+      }))
+      // Dedupe by id (prevents duplicates from realtime + pagination overlap)
+      setPosts(prev => {
+        if (reset) return enriched
+        const existing = new Set(prev.map(p => p.id))
+        const newOnes = enriched.filter(p => !existing.has(p.id))
+        return [...prev, ...newOnes]
+      })
+      setHasMore((data || []).length === PAGE_SIZE)
+    } catch (e) {
+      console.error('[feed] loadPosts error:', e?.message)
+      toast.error('Failed to load feed. Please refresh.')
+    } finally {
+      clearTimeout(failsafe)
+      setPostsLoading(false)
     }
-    const enriched = (data || []).map(p => ({
-      ...p,
-      profiles: profilesMap[p.user_id] || null,
-      likes_count: likeCounts[p.id] || 0,
-      comments_count: commentCounts[p.id] || 0,
-      liked_by_me: !!likedByMe[p.id],
-    }))
-    // Dedupe by id (prevents duplicates from realtime + pagination overlap)
-    setPosts(prev => {
-      if (reset) return enriched
-      const existing = new Set(prev.map(p => p.id))
-      const newOnes = enriched.filter(p => !existing.has(p.id))
-      return [...prev, ...newOnes]
-    })
-    setHasMore((data || []).length === PAGE_SIZE)
-    setPostsLoading(false)
   }, [supabase, category, search, page, user])
 
   // Reset & reload on filters change

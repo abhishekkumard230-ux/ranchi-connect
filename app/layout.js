@@ -1,7 +1,14 @@
 import './globals.css'
 import { Providers } from './providers'
 
-const APP_URL = process.env.NEXT_PUBLIC_BASE_URL || 'https://ranchi-connect.vercel.app'
+const RAW_URL = process.env.NEXT_PUBLIC_BASE_URL || 'https://ranchi-connect.vercel.app'
+// Guard against malformed values so the whole app doesn't crash at render time
+let APP_URL = 'https://ranchi-connect.vercel.app'
+try {
+  APP_URL = new URL(RAW_URL).origin
+} catch (_) {
+  APP_URL = 'https://ranchi-connect.vercel.app'
+}
 
 export const metadata = {
   metadataBase: new URL(APP_URL),
