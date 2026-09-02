@@ -55,13 +55,45 @@ function categoryMeta(key) {
 
 // ---------------- AUTH VIEW ----------------
 function AuthView({ supabase }) {
-  const [mode, setMode] = useState('signin') // signin | signup
+  const [mode, setMode] = useState('signin') // signin | signup | forgot
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [username, setUsername] = useState('')
   const [fullName, setFullName] = useState('')
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
+  const [signupSent, setSignupSent] = useState(false)  // show "check your email" screen after signup
+  const [forgotSent, setForgotSent] = useState(false)
+  const [resendCooldown, setResendCooldown] = useState(0)
+
+  // One-time toasts from redirects
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const p = new URLSearchParams(window.location.search)
+    if (p.get('verified') === '1') toast.success('Email verified! Please log in.')
+    if (p.get('reset') === '1') toast.success('Password updated. Please log in with your new password.')
+    if (p.get('auth_error')) toast.error(decodeURIComponent(p.get('auth_error')))
+    if (p.get('verified') || p.get('reset') || p.get('auth_error')) {
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return
+    const t = setTimeout(() => setResendCooldown(c => c - 1), 1000)
+    return () => clearTimeout(t)
+  }, [resendCooldown])
+
+  const humanizeError = (err) => {
+    const msg = err?.message || 'Something went wrong. Please try again.'
+    if (msg.includes('Invalid login credentials')) return 'Incorrect email or password.'
+    if (msg.includes('Email not confirmed')) return 'Please verify your email first. Check your inbox for the confirmation link.'
+    if (msg.includes('User already registered')) return 'An account with this email already exists. Try signing in instead.'
+    if (msg.includes('rate limit')) return 'Too many attempts. Please wait a minute and try again.'
+    if (msg.includes('Password should be')) return 'Password must be at least 6 characters long.'
+    if (msg.toLowerCase().includes('email address') && msg.includes('invalid')) return 'Please enter a valid email address.'
+    return msg
+  }
 
   const handleGoogleSignIn = async () => {
     setGoogleLoading(true)
@@ -69,12 +101,11 @@ function AuthView({ supabase }) {
       const origin = typeof window !== 'undefined' ? window.location.origin : ''
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo: `${origin}/auth/callback` },
+        options: { redirectTo: `${origin}/auth/callback?next=/` },
       })
       if (error) throw error
-      // On success browser is redirected to Google, no further action here
     } catch (err) {
-      toast.error(err.message || 'Google sign-in failed')
+      toast.error(humanizeError(err))
       setGoogleLoading(false)
     }
   }
@@ -84,26 +115,131 @@ function AuthView({ supabase }) {
     setLoading(true)
     try {
       if (mode === 'signup') {
+        const origin = typeof window !== 'undefined' ? window.location.origin : ''
         const { error } = await supabase.auth.signUp({
           email,
           password,
           options: {
             data: { username, full_name: fullName },
-            emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
+            emailRedirectTo: `${origin}/auth/callback?type=signup`,
           },
         })
         if (error) throw error
-        toast.success('Check your email to verify your account!')
-      } else {
+        setSignupSent(true)
+        setResendCooldown(30)
+        toast.success('Check your email to confirm your account!')
+      } else if (mode === 'signin') {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
         if (error) throw error
         toast.success('Welcome back!')
+      } else if (mode === 'forgot') {
+        const origin = typeof window !== 'undefined' ? window.location.origin : ''
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${origin}/auth/callback?type=recovery`,
+        })
+        if (error) throw error
+        setForgotSent(true)
+        toast.success('Password reset link sent! Check your email.')
       }
     } catch (err) {
-      toast.error(err.message || 'Auth failed')
+      toast.error(humanizeError(err))
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleResendVerification = async () => {
+    if (resendCooldown > 0) return
+    setLoading(true)
+    try {
+      const origin = typeof window !== 'undefined' ? window.location.origin : ''
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email,
+        options: { emailRedirectTo: `${origin}/auth/callback?type=signup` },
+      })
+      if (error) throw error
+      toast.success('Verification email resent!')
+      setResendCooldown(30)
+    } catch (err) {
+      toast.error(humanizeError(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ---------- POST-SIGNUP CONFIRMATION SCREEN ----------
+  if (signupSent) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-orange-50 via-white to-emerald-50 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800">
+        <div className="w-full max-w-md text-center">
+          <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl bg-gradient-to-br from-orange-500 to-emerald-500 shadow mb-4">
+            <MapPin className="h-8 w-8 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold mb-2">Check your inbox 📧</h1>
+          <p className="text-sm text-muted-foreground mb-1">We&apos;ve sent a confirmation link to</p>
+          <p className="font-medium mb-6">{email}</p>
+          <p className="text-xs text-muted-foreground mb-6">Click the link in the email to activate your account. Don&apos;t forget to check your spam folder.</p>
+          <div className="space-y-2">
+            <Button onClick={handleResendVerification} variant="outline" className="w-full" disabled={loading || resendCooldown > 0}>
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend verification email'}
+            </Button>
+            <Button onClick={() => { setSignupSent(false); setMode('signin') }} variant="ghost" className="w-full text-sm">Back to sign in</Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ---------- POST-FORGOT SCREEN ----------
+  if (forgotSent) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-orange-50 via-white to-emerald-50 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800">
+        <div className="w-full max-w-md text-center">
+          <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl bg-gradient-to-br from-orange-500 to-emerald-500 shadow mb-4">
+            <MapPin className="h-8 w-8 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold mb-2">Reset link sent 📧</h1>
+          <p className="text-sm text-muted-foreground mb-1">Check</p>
+          <p className="font-medium mb-6">{email}</p>
+          <p className="text-xs text-muted-foreground mb-6">Click the link to set a new password.</p>
+          <Button onClick={() => { setForgotSent(false); setMode('signin') }} variant="ghost" className="w-full text-sm">Back to sign in</Button>
+        </div>
+      </div>
+    )
+  }
+
+  // ---------- FORGOT PASSWORD FORM ----------
+  if (mode === 'forgot') {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-orange-50 via-white to-emerald-50 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-6">
+            <div className="inline-flex items-center gap-2 mb-3">
+              <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-orange-500 to-emerald-500 flex items-center justify-center shadow-lg">
+                <MapPin className="h-6 w-6 text-white" />
+              </div>
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-orange-600 to-emerald-600 bg-clip-text text-transparent">Reset password</h1>
+            </div>
+            <p className="text-sm text-muted-foreground">We&apos;ll email you a link to set a new password.</p>
+          </div>
+          <Card className="shadow-xl border-0 bg-card/80 backdrop-blur">
+            <CardContent className="pt-6">
+              <form onSubmit={handleSubmit} className="space-y-3">
+                <div>
+                  <label className="text-xs font-medium mb-1 block">Email</label>
+                  <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required autoFocus />
+                </div>
+                <Button type="submit" className="w-full bg-gradient-to-r from-orange-500 to-emerald-500 text-white" disabled={loading}>
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send reset link'}
+                </Button>
+                <Button type="button" onClick={() => setMode('signin')} variant="ghost" className="w-full text-sm">Back to sign in</Button>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -174,8 +310,16 @@ function AuthView({ supabase }) {
                 <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required />
               </div>
               <div>
-                <label className="text-xs font-medium mb-1 block">Password</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-medium">Password</label>
+                  {mode === 'signin' && (
+                    <button type="button" onClick={() => setMode('forgot')} className="text-xs text-orange-600 hover:underline font-medium">
+                      Forgot password?
+                    </button>
+                  )}
+                </div>
                 <Input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required minLength={6} />
+                {mode === 'signup' && <p className="text-[10px] text-muted-foreground mt-1">Minimum 6 characters.</p>}
               </div>
               <Button type="submit" className="w-full bg-gradient-to-r from-orange-500 to-emerald-500 hover:from-orange-600 hover:to-emerald-600 text-white shadow-md" disabled={loading}>
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : (mode === 'signup' ? 'Create Account' : 'Sign In')}
@@ -189,6 +333,7 @@ function AuthView({ supabase }) {
     </div>
   )
 }
+
 
 // ---------------- POST CARD ----------------
 function PostCard({ post, currentUser, supabase, onDelete, onOpenComments, onOpenProfile }) {
